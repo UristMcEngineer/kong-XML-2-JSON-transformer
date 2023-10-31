@@ -1,0 +1,74 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: plugin-xml-2-json-transformer
+  namespace: kong
+data:
+  handler.lua: |
+    local kong_meta = require "kong.meta"
+    local cjson = require("cjson.safe").new()
+    local xml2lua = require("xml2lua")
+    local handler = require("xmlhandler.tree")
+    local check = false
+    local XML2JsonHandler = {
+      PRIORITY = 801,
+      VERSION = kong_meta.version,
+    }
+    function XML2JsonHandler:header_filter(conf)
+      if kong.response.get_header("Content-Type") == "application/xml" then 
+        check = true
+        kong.response.clear_header("Content-Type")
+        kong.response.clear_header("Content-Length") -- kong.response.set_raw_body(body) can't clear the Content-Length header and would only work for responses without a content header if we did not clear it here.
+        kong.response.set_header("Content-Type", "application/json")
+      end
+    end
+    function XML2JsonHandler:body_filter(conf) 
+      if check then
+        local body = kong.response.get_raw_body()
+        if body then
+          body = Transform(body) -- must use function when transforming body. doing it here would cause error. (idk why, lua stuff.)
+          kong.response.set_raw_body(body)
+        end
+      end
+    end
+    function Transform(body)
+      local myhandler = handler:new() -- must start fresh handler or your parse will keep adding every subsecquent call.
+      local parser = xml2lua.parser(myhandler)
+      parser:parse(body)
+      local xml = myhandler.root
+      local json_text = cjson.encode(xml)
+      return json_text
+    end
+    return XML2JsonHandler
+  schema.lua: |
+    local typedefs = require "kong.db.schema.typedefs"
+    local validate_header_name = require("kong.tools.utils").validate_header_name
+    local function validate_headers(pair, validate_value)
+      local name, value = pair:match("^([^:]+):*(.-)$")
+      if validate_header_name(name) == nil then
+        return nil, string.format("'%s' is not a valid header", tostring(name))
+      end
+
+      if validate_value then
+        if validate_header_name(value) == nil then
+          return nil, string.format("'%s' is not a valid header", tostring(value))
+        end
+      end
+      return true
+    end
+    local function validate_colon_headers(pair)
+      return validate_headers(pair, true)
+    end
+    return {
+      name = "xml2json",
+      fields = {
+        { protocols = typedefs.protocols_http },
+        { config = {
+            type = "record",
+            fields = {
+              { enabled = {  type = "boolean", default = true, required = true } },
+            },
+         },
+        },
+      },
+    }
