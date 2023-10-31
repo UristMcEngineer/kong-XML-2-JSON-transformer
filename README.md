@@ -12,14 +12,12 @@ The plugin starts by checking the "Content-Type" header. if it is "application/x
 
 ## Setup:
 
-Set the working directory to the directory this readme is in and execute
-```
-docker build --tag "image_name"
-docker push "image_name"
-```
-to build the container image using the dockerfile provided to install dependencies for the XML2JSON plugin.
+Create a ConfigMap with the Lua code of the plugin by applying the supplied `ConfigMap.yaml`.
 
-To run the plugin, first modify the Deployment "kong-proxy":
+Build a custom container image for the proxy-kong Deployment by using the supplied `Dockerfile` and push it to a container repository accessible from your cluster.
+This is one way to supply the necessary dependencies to the plugin Lua code.
+
+To install the plugin, first modify the Deployment "kong-proxy" to use your custom image you created in the last step and to mount the Lua code from your ConfigMap:
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
@@ -49,4 +47,34 @@ spec:
         name: plugin-xml-2-json-transformer
     ...
 ```
-works alongside the plugins provided by Kong.
+
+Now the Plugin can be defined as a KongPlugin or KongClusterPlugin and then applied to Ingresses or Services just like official plugins:
+```yaml
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: xml-2-json-transformer
+  namespace: business-logic
+plugin: xml-2-json-transformer
+–––
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: xml-api-unchanged
+  namespace: business-logic
+  annotations:
+    konghq.com/strip-path: 'true'
+    konghq.com/plugins: xml-2-json-transformer
+spec:
+  ingressClassName: kong
+  rules:
+    - http:
+        paths:
+          - path: '/xml-api'
+            pathType: Prefix
+            backend:
+              service:
+                name: xml-api
+                port:
+                  number: 18080
+```
